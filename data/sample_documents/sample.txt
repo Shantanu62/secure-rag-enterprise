@@ -1,0 +1,8 @@
+
+Production RAG Test Document
+
+This is a synthetic document created for testing document extraction.
+
+The platform supports secure document processing, role-based access control, and retrieval augmented generation.
+
+PDF, DOCX, and TXT files are supported.
