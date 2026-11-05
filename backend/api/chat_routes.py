@@ -1,4 +1,5 @@
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,6 +8,8 @@ from pydantic import BaseModel, Field
 from backend.auth.dependencies import require_permission
 from backend.rag.answer_service import answer_question
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/chat",
@@ -64,9 +67,9 @@ def ask_question(
             detail=str(exc),
         ) from exc
 
-    except Exception as exc:
-        # Keep internal errors and provider details out of API responses.
+    except Exception:
+        logger.exception("Chat answer generation failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to generate an answer. Please try again later.",
-        ) from exc
+        ) from None
