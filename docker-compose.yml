@@ -1,0 +1,38 @@
+﻿services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secure-rag-backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/secure_rag.db
+      VECTOR_STORE_PATH: /app/data/vector_store
+      UPLOAD_DIR: /app/data/uploads
+    ports:
+      - "127.0.0.1:8003:8000"
+    volumes:
+      - secure_rag_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: secure-rag-frontend
+    environment:
+      API_BASE_URL: http://backend:8000
+    ports:
+      - "127.0.0.1:8503:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  secure_rag_data:

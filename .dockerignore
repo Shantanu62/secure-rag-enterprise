@@ -1,0 +1,20 @@
+﻿.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+data/uploads/
+data/vector_store/
+
+# Backup files
+*.backup
+*.bak
+
+*.sqlite3

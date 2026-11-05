@@ -47,3 +47,10 @@ data/uploads/
 .DS_Store
 
 data/vector_store/
+
+# Backup files
+*.backup
+
+# Local backup and cache files
+*.backup-*
+__pycache__/
