@@ -259,10 +259,14 @@ def api_request(method, path, token=None, **kwargs):
     )
 def check_api():
     try:
-        response = requests.get(f"{API_URL}/health", timeout=5)
+        response = requests.get(
+            f"{API_URL}/health",
+            timeout=90,
+        )
         return response.ok
     except requests.RequestException:
         return False
+
 def login_user(username, password):
     try:
         response = api_request(
