@@ -1,4 +1,4 @@
-
+﻿
 from functools import lru_cache
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 from qdrant_client import QdrantClient, models
 
 from backend.core.config import settings
+from backend.auth.permissions import Role
 
 
 COLLECTION_NAME = "secure_rag_documents"
@@ -13,12 +14,30 @@ COLLECTION_NAME = "secure_rag_documents"
 
 @lru_cache(maxsize=1)
 def get_qdrant_client() -> QdrantClient:
-    """Create and cache a persistent local Qdrant client."""
-    storage_path = Path(settings.VECTOR_STORE_PATH)
-    storage_path.mkdir(parents=True, exist_ok=True)
+    """
+    Create a Qdrant client.
 
-    client = QdrantClient(path=str(storage_path))
+    Uses Qdrant Cloud when QDRANT_URL is configured.
+    Otherwise, uses persistent local Qdrant storage.
+    """
 
+    qdrant_url = settings.QDRANT_URL.strip()
+
+    if qdrant_url:
+        client = QdrantClient(
+            url=qdrant_url,
+            api_key=settings.QDRANT_API_KEY.strip() or None,
+            timeout=30,
+        )
+    else:
+        storage_path = Path(settings.VECTOR_STORE_PATH)
+        storage_path.mkdir(parents=True, exist_ok=True)
+
+        client = QdrantClient(
+            path=str(storage_path),
+        )
+
+    # Create the collection only when it does not already exist.
     if not client.collection_exists(COLLECTION_NAME):
         client.create_collection(
             collection_name=COLLECTION_NAME,
@@ -26,6 +45,22 @@ def get_qdrant_client() -> QdrantClient:
                 size=settings.EMBEDDING_DIMENSION,
                 distance=models.Distance.COSINE,
             ),
+        )
+
+    # Create payload indexes required for filtered searches and deletion.
+    payload_indexes = {
+        "is_active": models.PayloadSchemaType.BOOL,
+        "department": models.PayloadSchemaType.KEYWORD,
+        "allowed_roles": models.PayloadSchemaType.KEYWORD,
+        "document_id": models.PayloadSchemaType.KEYWORD,
+    }
+
+    for field_name, field_schema in payload_indexes.items():
+        client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name=field_name,
+            field_schema=field_schema,
+            wait=True,
         )
 
     return client
@@ -37,6 +72,7 @@ def index_chunks(
     metadata: dict,
 ) -> int:
     """Store document chunks with document-level RBAC metadata."""
+
     if len(chunks) != len(embeddings):
         raise ValueError("Chunks and embeddings count must match")
 
@@ -51,14 +87,28 @@ def index_chunks(
     }
 
     missing = required_fields - metadata.keys()
+
     if missing:
         raise ValueError(f"Missing metadata fields: {sorted(missing)}")
 
-    if not isinstance(metadata["allowed_roles"], list):
-        raise ValueError("allowed_roles must be a list")
+    allowed_roles = metadata["allowed_roles"]
 
-    if not metadata["allowed_roles"]:
-        raise ValueError("At least one allowed role is required")
+    if not isinstance(allowed_roles, list) or not allowed_roles:
+        raise ValueError("allowed_roles must be a non-empty list")
+
+    valid_roles = {role.value for role in Role}
+
+    if any(role not in valid_roles for role in allowed_roles):
+        raise ValueError("allowed_roles contains an invalid role")
+
+    if len(set(allowed_roles)) != len(allowed_roles):
+        raise ValueError("allowed_roles contains duplicate roles")
+
+    if (
+        not isinstance(metadata["department"], str)
+        or not metadata["department"].strip()
+    ):
+        raise ValueError("A valid department is required")
 
     client = get_qdrant_client()
     points = []
@@ -105,11 +155,17 @@ def search_chunks(
     limit: int | None = None,
 ) -> list[dict]:
     """Retrieve only chunks authorized for the requesting user."""
+
     if len(query_embedding) != settings.EMBEDDING_DIMENSION:
         raise ValueError("Query embedding dimension mismatch")
 
-    if not department or not role:
-        raise ValueError("Department and role are required")
+    if not isinstance(department, str) or not department.strip():
+        raise ValueError("A valid department is required")
+
+    try:
+        normalized_role = Role(role).value
+    except (ValueError, TypeError):
+        raise ValueError("Invalid role")
 
     client = get_qdrant_client()
 
@@ -120,19 +176,21 @@ def search_chunks(
         ),
     ]
 
-    # Admin access follows the existing SQL authorization policy:
-    # all active documents are accessible.
-    if role != "Admin":
-        conditions.extend([
-            models.FieldCondition(
-                key="department",
-                match=models.MatchValue(value=department),
-            ),
-            models.FieldCondition(
-                key="allowed_roles",
-                match=models.MatchValue(value=role),
-            ),
-        ])
+    # Admin can search across departments and allowed roles.
+    # Other roles must match both department and allowed_roles.
+    if normalized_role != Role.ADMIN.value:
+        conditions.extend(
+            [
+                models.FieldCondition(
+                    key="department",
+                    match=models.MatchValue(value=department.strip()),
+                ),
+                models.FieldCondition(
+                    key="allowed_roles",
+                    match=models.MatchValue(value=normalized_role),
+                ),
+            ]
+        )
 
     response = client.query_points(
         collection_name=COLLECTION_NAME,
@@ -158,6 +216,7 @@ def search_chunks(
 
 def delete_document_chunks(document_id: str) -> None:
     """Delete all indexed chunks belonging to a document."""
+
     client = get_qdrant_client()
 
     client.delete(
